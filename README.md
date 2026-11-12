@@ -1,6 +1,6 @@
 # Lab 3b: Low-Power Design for IoT Nodes (Tinkercad emulation)
 
-I am Dominic Aidoo (MSc Advanced IoT Systems and Design). This repository is my Lab 3b work: I emulate the current profile of a Nano 33 BLE Sense node and an ESP32 gateway in Tinkercad Circuits, integrate the charge over a duty cycle, and estimate battery life.
+This repository is my Lab 3b work: I emulate the current profile of a Nano 33 BLE Sense node and an ESP32 gateway in Tinkercad Circuits, integrate the charge over a duty cycle, and estimate battery life.
 
 ## Tinkercad circuit
 
