@@ -111,7 +111,7 @@ struct Meter {
   float charge_mC()  { return q_mAms / 1000.0; }          // mA*s = mC
   float avg_mA()     { float t = elapsed_ms(); return t > 0 ? (float)(q_mAms / t) : 0; }
 
-  // scale = 1 for the Nano profile, 20 for the ESP32 profile (1 sim mA = 20 real mA)
+  // scale = 1 for the Nano profile (1 sim mA = 1 real mA)
   void print(const char *label, float scale) {
     Serial.print(label);
     Serial.print(F(", t_ms="));      Serial.print(elapsed_ms(), 1);

@@ -2,9 +2,8 @@
 // Lab 3b (L03b) - ONE sketch that runs the whole Tinkercad lab in a single simulation:
 //   Part 1  Nano node modes a-f, about 1 s each, one line per mode   (= nano_mode_a..f / nano_mode_sweep)
 //   Part 2  Nano duty cycle: WAKE+SENSE -> ADVERTISE -> SLEEP       (= nano_duty_cycle)
-//   Part 3  ESP32 duty cycle, scaled x20: BOOT -> WIFI_CONNECT -> TRANSMIT -> SLEEP (= esp32_duty_cycle)
-//   Part 4  Summary table, charge shares, and battery-life estimates at 1, 10 and 60 min
-//           for both boards, at 2600 mAh nominal and at the derated 1635 mAh (5 V side).
+//   Part 3  Summary table, charge shares, and battery-life estimates at 1, 10 and 60 min
+//           at 2600 mAh nominal and at the derated 1635 mAh (5 V side).
 // Load patterns (which pins are on in each state), state times and sample rates are the
 // same as in the individual sketches, so the numbers should match them.
 // Same circuit as the write-up (B4): Arduino Uno R3, 22 ohm shunt on A0, internal 1.1 V reference.
@@ -73,7 +72,7 @@ struct Meter {
   float charge_mC()  { return q_mAms / 1000.0; }          // mA*s = mC
   float avg_mA()     { float t = elapsed_ms(); return t > 0 ? (float)(q_mAms / t) : 0; }
 
-  // scale = 1 for the Nano profile, 20 for the ESP32 profile (1 sim mA = 20 real mA)
+  // scale = 1 for the Nano profile (1 sim mA = 1 real mA)
   void print(const char *label, float scale) {
     Serial.print(label);
     Serial.print(F(", t_ms="));      Serial.print(elapsed_ms(), 1);
@@ -98,9 +97,9 @@ struct Meter {
 
 // Results of one duty cycle, kept for the summary
 struct DutyResult {
-  float tState_ms[3];   // duration of each active state
-  float iState_mA[3];   // average current of each active state (real mA, scaled)
-  float qState_mC[3];   // charge of each active state (real mC, scaled)
+  float tState_ms[2];   // duration of each active state (WAKE+SENSE, ADVERTISE)
+  float iState_mA[2];   // average current of each active state (real mA, scaled)
+  float qState_mC[2];   // charge of each active state (real mC, scaled)
   uint8_t nStates;
   float qActive_mC, tActive_ms;
   float tSleep_ms, iSleepMeas_mA, iSleep_mA;   // iSleep_mA = value used for estimates
@@ -158,11 +157,11 @@ void setupPins() {
 // =====================================================================
 //  Settings for the unified run
 // =====================================================================
-// Length of ONE duty cycle (both boards). The lab procedure uses 60000UL (wake every 60 s).
+// Length of ONE Nano duty cycle. The lab procedure uses 60000UL (wake every 60 s).
 // 10000UL keeps the Tinkercad run short. Only the SLEEP time changes with CYCLE_MS: the
 // battery-life estimates use the measured ACTIVE charge plus the sleep floor over the rest of
-// the interval (same method as estimate() in the duty-cycle sketches), so they come out the same.
-// The "WHOLE CYCLE" average current, however, is for CYCLE_MS, so use 60000UL for Tables 2 and 4.
+// the interval (same method as estimate() in nano_duty_cycle), so they come out the same.
+// The "WHOLE CYCLE" average current, however, is for CYCLE_MS, so use 60000UL for Table 2.
 const unsigned long CYCLE_MS = 10000UL;   // lab uses 60000UL
 
 const unsigned long MODE_MS = 1000;       // window per Nano mode (single-mode sketches print 1 s windows)
@@ -175,14 +174,6 @@ const unsigned long ADV_MS = 2000;        // lab procedure: advertise for 2 s
 // nRF52840 System ON idle, 1.5 uA typ. (Nordic nRF52840 Product Specification). Chip only.
 const float NANO_SLEEP_FLOOR_mA = 0.0015;
 
-// ESP32 gateway profile (from esp32_duty_cycle.ino)
-const float ESP_SCALE = 20;               // 1 sim mA = 20 real ESP32 mA
-const unsigned long BOOT_MS = 300;        // PLACEHOLDER
-const unsigned long CONNECT_MS = 2000;    // PLACEHOLDER: Wi-Fi association + DHCP
-const unsigned long TX_MS = 200;          // PLACEHOLDER: send one reading
-// ESP32 Deep-sleep, RTC timer + RTC memory, 10 uA (Espressif ESP32 Series Datasheet v5.3, Table 4-2). Chip only.
-const float ESP_SLEEP_FLOOR_mA = 0.01;
-
 // Battery: 2600 mAh lab pack, and the derated capacity at 5 V (write-up B8, item 7):
 // 2600 mAh x 3.7 V / 5 V x 0.85 (assumed boost efficiency) = 1635 mAh
 const float BATTERY_mAh = 2600.0;
@@ -193,7 +184,7 @@ const float BATTERY_DERATED_mAh = 2600.0 * 3.7 / 5.0 * 0.85;
 // =====================================================================
 
 float modeI[6];          // Nano mode a-f average current (mA)
-DutyResult nanoRes, espRes;
+DutyResult nanoRes;
 unsigned long runNo = 0;
 
 // One active state: sample every 5 ms until ms have passed (same as the duty-cycle sketches).
@@ -324,63 +315,15 @@ void runNanoDuty() {
 }
 
 // =====================================================================
-//  Part 3: ESP32 duty cycle, scaled x20 (one cycle)
-// =====================================================================
-void runEspDuty() {
-  Serial.println(F("--- Part 3: ESP32 duty cycle (x20) ---"));
-  Meter mState[3], mSleep, mCycle;
-  unsigned long tCycle = millis();
-  mCycle.start();
-
-  // ---- state 1: BOOT ----
-  // Fix: in esp32_duty_cycle T/RH printed 0 because the sensors were never powered or read.
-  // Here the sensor supply (D7) is switched on briefly at the start of BOOT, the sensors are
-  // read while it is on, one sample captures that short period, and D7 goes off again.
-  // The sensor current (about 0.5 sim mA for ~15 ms) is counted inside BOOT. Because the ESP32
-  // printout is x20, it shows up as a BOOT I_max of about 70 mA and adds well under 1 mC to BOOT.
-  mState[0].start();
-  unsigned long tBoot = millis();
-  setLoads(1,1,0,0,0);
-  delay(5);                                     // let the TMP36 output settle
-  espRes.tempC = readTempC(); espRes.rh = readHumidity();
-  mState[0].sample(); mCycle.sample();          // charge for the sensor-read period
-  setLoads(1,0,0,0,0);
-  runStateFrom(&mState[0], &mCycle, tBoot, BOOT_MS);   // BOOT still lasts BOOT_MS in total
-
-  // ---- state 2: WIFI_CONNECT ----
-  setLoads(1,0,1,0,0);
-  mState[1].start();
-  runState(&mState[1], &mCycle, CONNECT_MS);
-
-  // ---- state 3: TRANSMIT ----
-  setLoads(1,0,1,1,1);
-  mState[2].start();
-  runState(&mState[2], &mCycle, TX_MS);
-
-  // ---- SLEEP until the next wake-up ----
-  runSleep(&mSleep, &mCycle, tCycle);
-
-  Serial.print(F("=== ESP32 cycle  T_C=")); Serial.print(espRes.tempC, 1);
-  Serial.print(F("  RH_pct=")); Serial.println(espRes.rh, 1);
-  mState[0].print(F("BOOT"), ESP_SCALE);
-  mState[1].print(F("WIFI_CONNECT"), ESP_SCALE);
-  mState[2].print(F("TRANSMIT"), ESP_SCALE);
-  mSleep.print(F("SLEEP"), ESP_SCALE);
-  mCycle.print(F("WHOLE CYCLE"), ESP_SCALE);
-  finishDuty(&espRes, mState, 3, &mSleep, &mCycle, ESP_SCALE, ESP_SLEEP_FLOOR_mA);
-  printActiveLine(&espRes, ESP_SLEEP_FLOOR_mA);
-}
-
-// =====================================================================
-//  Part 4: summary and battery-life estimates
+//  Part 3: summary and battery-life estimates
 // =====================================================================
 void printPct(float part, float whole) {
   Serial.print(whole > 0 ? 100.0 * part / whole : 0, 1); Serial.print('%');
 }
 
-// One board: per-state charge shares at 60 / 600 / 3600 s, then I_avg and life at both capacities.
+// Per-state charge shares at 60 / 600 / 3600 s, then I_avg and life at both capacities.
 void printBoard(const __FlashStringHelper *board, void *pr, const __FlashStringHelper *n0,
-                const __FlashStringHelper *n1, const __FlashStringHelper *n2) {
+                const __FlashStringHelper *n1) {
   DutyResult &r = *(DutyResult *)pr;
   const float intervals[3] = {60, 600, 3600};
   Serial.print(F("[")); Serial.print(board);
@@ -400,13 +343,12 @@ void printBoard(const __FlashStringHelper *board, void *pr, const __FlashStringH
     Serial.print(F(", derated_days=")); Serial.println(BATTERY_DERATED_mAh / iAvg / 24.0, 1);
     Serial.print(F("    shares: ")); Serial.print(n0); Serial.print(' '); printPct(r.qState_mC[0], qTotal);
     Serial.print(F(", ")); Serial.print(n1); Serial.print(' '); printPct(r.qState_mC[1], qTotal);
-    if (r.nStates > 2) { Serial.print(F(", ")); Serial.print(n2); Serial.print(' '); printPct(r.qState_mC[2], qTotal); }
     Serial.print(F(", SLEEP ")); printPct(qSleep, qTotal); Serial.println();
   }
 }
 
 void printSummary() {
-  Serial.println(F("--- Part 4: summary ---"));
+  Serial.println(F("--- Part 3: summary ---"));
   Serial.println(F("Nano modes, I_avg_mA:"));
   for (uint8_t k = 0; k < 6; k++) {
     Serial.print(F("  ")); Serial.print((char)('a' + k)); Serial.print(F(": "));
@@ -417,16 +359,9 @@ void printSummary() {
   Serial.print(F("Battery: ")); Serial.print(BATTERY_mAh, 0);
   Serial.print(F(" mAh nominal; derated = 2600 x 3.7/5 x 0.85 = ")); Serial.print(BATTERY_DERATED_mAh, 0);
   Serial.println(F(" mAh at 5 V"));
-  printBoard(F("Nano"), &nanoRes, F("WAKE+SENSE"), F("ADVERTISE"), F(""));
-  printBoard(F("ESP32 x20"), &espRes, F("BOOT"), F("WIFI_CONNECT"), F("TRANSMIT"));
-  Serial.print(F("ESP32/Nano charge per report (Q_active ratio) = "));
-  Serial.println(espRes.qActive_mC / nanoRes.qActive_mC, 1);
-  Serial.print(F("ESP32/Nano I_avg ratio at 10 min = "));
-  Serial.println(avgAtInterval(&espRes, 600) / avgAtInterval(&nanoRes, 600), 1);
-  Serial.print(F("T_C / RH_pct read in duty cycles: Nano ")); Serial.print(nanoRes.tempC, 1);
-  Serial.print(F(" / ")); Serial.print(nanoRes.rh, 1);
-  Serial.print(F(", ESP32 ")); Serial.print(espRes.tempC, 1);
-  Serial.print(F(" / ")); Serial.println(espRes.rh, 1);
+  printBoard(F("Nano"), &nanoRes, F("WAKE+SENSE"), F("ADVERTISE"));
+  Serial.print(F("T_C / RH_pct read in the duty cycle: ")); Serial.print(nanoRes.tempC, 1);
+  Serial.print(F(" / ")); Serial.println(nanoRes.rh, 1);
 }
 
 // =====================================================================
@@ -441,7 +376,6 @@ void loop() {
   Serial.print(F("##### Run ")); Serial.println(runNo);
   runModes();
   runNanoDuty();
-  runEspDuty();
   printSummary();
   setLoads(0,0,0,0,0);
 #if REPEAT_RUNS
